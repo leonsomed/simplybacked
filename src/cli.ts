@@ -1,9 +1,28 @@
 import { Block, decrypt, encrypt, Secret } from "blockcrypt";
 import encodeQR from "qr";
-import { Bitmap, Jimp } from "jimp";
-import fs from "fs/promises";
+import { Bitmap, Jimp, loadFont } from "jimp";
+import { SANS_16_BLACK, SANS_32_BLACK } from "jimp/fonts";
 import argon2 from "./argon2";
 import decodeQR from "qr/decode.js";
+
+type HttpTargetsPart = string[];
+
+interface PartWrapper {
+  type: "part";
+  data: Part;
+}
+
+interface TextPartWrapper {
+  type: "text";
+  data: string;
+}
+
+interface HttpTargetsPartWrapper {
+  type: "httpTargets";
+  data: HttpTargetsPart;
+}
+
+type QRDecoded = PartWrapper | TextPartWrapper | HttpTargetsPartWrapper;
 
 function parseQRData(data: string): Payload {
   if (!data) {
@@ -36,12 +55,33 @@ function parseQRData(data: string): Payload {
   };
 }
 
-function parseQRPartData(data: string): Part {
+function parseQRPartData(data: string): QRDecoded {
   if (!data) {
     throw new Error("Nullish QR Part data");
   }
 
-  const parsed = JSON.parse(data);
+  let parsed;
+
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    if (typeof data === "string") {
+      return { type: "text", data };
+    }
+  }
+
+  try {
+    if (
+      Array.isArray(parsed) &&
+      ((parsed[0] === "skip" && parsed.length === 1) ||
+        parsed.map((n) => new URL(n)))
+    ) {
+      return { type: "httpTargets", data: parsed };
+    }
+  } catch (e) {
+    console.error(e);
+    throw new Error("Invalid QR");
+  }
 
   if (!parsed.order && typeof parsed.order !== "number") {
     throw new Error("Payload missing order");
@@ -52,8 +92,11 @@ function parseQRPartData(data: string): Part {
   }
 
   return {
-    base64: parsed.base64,
-    order: parsed.order,
+    type: "part",
+    data: {
+      base64: parsed.base64,
+      order: parsed.order,
+    },
   };
 }
 
@@ -69,7 +112,11 @@ export interface Part {
   order: number;
 }
 
-export async function createBackup(blockcryptSecrets: Secret[]) {
+export async function createBackup(
+  blockcryptSecrets: Secret[],
+  httpTargets: string[] | undefined,
+  label: string | undefined,
+) {
   // TODO 3rd param: not sure what it means, but superbacked passes a hard-coded value of 48 https://github.com/superbacked/superbacked/blob/a2a34b06a402f2e4599ab0b6aabbad80cc95b1c4/src/create.ts#L213
   // TODO 4th param: not quite sure what it means you can figure out the right dataLength by printing it in this line it has to be a multiple of 64 https://github.com/superbacked/blockcrypt/blob/ae4040826b708d1d8a85ce0c98442d626abe26d5/src/index.ts#L129
   // throw new Error(`Data too long for data length ${unpaddedDataLength} > ${dataLength}`);
@@ -110,6 +157,45 @@ export async function createBackup(blockcryptSecrets: Secret[]) {
   const base64Data = Buffer.from(JSON.stringify(payload)).toString("base64");
   const partitionSize = base64Data.length / 4;
 
+  // start image generation
+  const backgroundImage = new Jimp({
+    width: 1000,
+    height: 2000,
+    color: 0xffffffff,
+  });
+  const font = await loadFont(SANS_16_BLACK);
+  const fontLarge = await loadFont(SANS_32_BLACK);
+
+  if (label) {
+    backgroundImage.print({
+      font,
+      x: 50,
+      y: 100,
+      text: label,
+    });
+  }
+
+  const qrcodeBuffer = encodeQR(
+    JSON.stringify(httpTargets ?? ["skip"]),
+    "gif",
+    {
+      ecc: "high",
+      scale: 4,
+    },
+  );
+  const firstQrImg = await Jimp.read(Buffer.from(qrcodeBuffer));
+  backgroundImage.composite(
+    firstQrImg,
+    (backgroundImage.width / 4) * 3 - firstQrImg.width / 2,
+    50,
+  );
+  backgroundImage.print({
+    font: fontLarge,
+    x: 5 + (backgroundImage.width / 4) * 3,
+    y: 20,
+    text: (1).toString(),
+  });
+
   const parts = [
     {
       data: JSON.stringify({
@@ -117,7 +203,7 @@ export async function createBackup(blockcryptSecrets: Secret[]) {
         order: 1,
       }),
       x: 0,
-      y: 0,
+      y: firstQrImg.height + 50,
     },
     {
       data: JSON.stringify({
@@ -125,7 +211,7 @@ export async function createBackup(blockcryptSecrets: Secret[]) {
         order: 2,
       }),
       x: 500,
-      y: 0,
+      y: firstQrImg.height + 50,
     },
     {
       data: JSON.stringify({
@@ -133,7 +219,7 @@ export async function createBackup(blockcryptSecrets: Secret[]) {
         order: 3,
       }),
       x: 0,
-      y: 500,
+      y: firstQrImg.height + 550,
     },
     {
       data: JSON.stringify({
@@ -141,35 +227,45 @@ export async function createBackup(blockcryptSecrets: Secret[]) {
         order: 4,
       }),
       x: 500,
-      y: 500,
+      y: firstQrImg.height + 550,
     },
   ];
 
-  let backgroundImage = new Jimp({
-    width: 1000,
-    height: 1000,
-    color: 0xffffffff,
-  });
-
   let i = 0;
+  let partHeight = 0;
   for (const part of parts) {
     i++;
     const qrcodeBuffer = encodeQR(part.data, "gif", {
       ecc: "high",
       scale: 4,
     });
-    // save to file
-    const name = `test-part-${i}.gif`;
-    await fs.writeFile(name, qrcodeBuffer);
-    const img = await Jimp.read(name);
+    const img = await Jimp.read(Buffer.from(qrcodeBuffer));
 
-    backgroundImage.composite(img, part.x, part.y); // Place overlay at x=50, y=50
+    partHeight = img.height;
+    backgroundImage.composite(
+      img,
+      part.x + (backgroundImage.width / 2 - img.width) / 2,
+      part.y + (backgroundImage.width / 2 - img.height) / 2,
+    );
+    backgroundImage.print({
+      font: fontLarge,
+      x: 25 + part.x + img.width / 2,
+      y: 10 + part.y,
+      text: (i + 1).toString(),
+    });
   }
 
-  await backgroundImage.write("some-test.bmp");
+  backgroundImage.crop({
+    w: backgroundImage.width,
+    h: parts[parts.length - 1].y + partHeight + 100,
+    x: 0,
+    y: 0,
+  });
+
+  return { parts, image: backgroundImage };
 }
 
-export function decodeQRPart(bitmap: Bitmap): Part {
+export function decodeQRImage(bitmap: Bitmap): QRDecoded {
   const decodedQR = decodeQR(bitmap);
   return parseQRPartData(decodedQR);
 }

@@ -6,7 +6,7 @@
     "prestart": "npm run build",
     "start": "node dist/server.js",
     "build": "tsc --build",
-    "dev": "tsx src/server.ts"
+    "dev": "source $HOME/.nvm/nvm.sh; nvm use && tsx src/server.ts"
   },
   "keywords": [],
   "author": "",

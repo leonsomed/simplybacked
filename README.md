@@ -16,7 +16,7 @@ npm install
 npm start
 ```
 
-You can now visit http://localhost:3000/create.html or http://localhost:3000/restore.html
+You can now visit http://localhost:3000/create.html or http://localhost:3000/restore-with-qr.html
 
 ## Build
 

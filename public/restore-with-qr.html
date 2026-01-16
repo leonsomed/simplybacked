@@ -1,0 +1,475 @@
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/pico.min.css" />
+
+    <script
+      src="https://unpkg.com/react@18/umd/react.development.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.10.3/babel.min.js"
+      crossorigin
+    ></script>
+  </head>
+  <body>
+    <main class="container">
+      <nav class="container">
+        <a href="/"><h1>Simplybacked</h1></a>
+        <ul>
+          <li><a href="/create.html">Create</a></li>
+          <li><a href="/restore-with-qr.html">Restore With QR</a></li>
+        </ul>
+      </nav>
+
+      <div id="root"></div>
+    </main>
+
+    <script type="text/babel" data-presets="react,stage-3">
+      const Page = () => {
+        const [currentStep, setCurrentStep] = React.useState(1);
+        const [revealSecret, setRevealSecret] = React.useState(false);
+        const [currentSecret, setCurrentSecret] = React.useState("");
+        const [httpTargetSecret, setHttpTargetSecret] = React.useState();
+        const [showCamera, setShowCamera] = React.useState(true);
+        const [revealPassword, setRevealPassword] = React.useState(false);
+        const [password, setPassword] = React.useState("");
+        const showCameraRef = React.useRef();
+        showCameraRef.current = showCamera;
+        const [{ httpTargets, httpTargetQrs }, setHttpTargets] = React.useState(
+          {
+            httpTargets: [],
+            httpTargetQrs: [],
+          },
+        );
+        const [currentQRindex, setCurrentQRindex] = React.useState(0);
+        const [partsCompleted, setPartsCompleted] = React.useState(0);
+        const [devices, setDevices] = React.useState([]);
+        const [selectedCameraId, setSelectedCameraId] = React.useState();
+        const videoRef = React.useRef();
+        const imageCaptureRef = React.useRef();
+
+        React.useEffect(() => {
+          async function run() {
+            const response = await fetch("/api-state", {
+              method: "GET",
+            });
+
+            const result = await response.json();
+
+            setHttpTargets({
+              httpTargets: result.httpTargets,
+              httpTargetQrs: result.httpTargetQrs,
+            });
+            setCurrentQRindex(0);
+            setPartsCompleted(result.parts);
+            setHttpTargetSecret(result.httpTargetSecret);
+
+            if (result.httpTargetSecret) {
+              setCurrentStep(3);
+              return;
+            }
+
+            if (result.httpTargets?.length) {
+              if (
+                result.httpTargets.length === 1 &&
+                result.httpTargets[0] === "skip"
+              ) {
+                setCurrentStep(3);
+                return;
+              }
+              setCurrentStep(2);
+              setShowCamera(false);
+              return;
+            }
+          }
+
+          run();
+        }, []);
+
+        React.useEffect(() => {
+          if (partsCompleted === 4) {
+            setCurrentStep(4);
+            setShowCamera(false);
+          }
+        }, [partsCompleted]);
+
+        React.useEffect(() => {
+          async function run() {
+            const videoDevices = (
+              await navigator.mediaDevices.enumerateDevices()
+            ).filter((next) => next.kind === "videoinput");
+            setDevices(videoDevices);
+            setSelectedCameraId(videoDevices[0]?.deviceId);
+          }
+
+          const id = setInterval(() => {
+            if (
+              !imageCaptureRef.current ||
+              !showCameraRef.current ||
+              partsCompleted === 4
+            ) {
+              imageCaptureRef.current?.track.stop();
+              return;
+            }
+
+            imageCaptureRef.current
+              .grabFrame()
+              .then(async (bmp) => {
+                const blob = await imageBitmapToBlob(bmp);
+                const formData = new FormData();
+                formData.append("image", blob, "filename.png");
+
+                const response = await fetch("/api-qr-frame", {
+                  method: "POST",
+                  body: formData,
+                });
+
+                const result = await response.json();
+
+                if (result?.parts === 4) {
+                  clearInterval(id);
+                }
+
+                if (result?.httpTargetSecret) {
+                  setHttpTargetSecret(result.httpTargetSecret);
+                  setCurrentStep(3);
+                  alert("scanned");
+                }
+                if (result?.parts) {
+                  setPartsCompleted(result.parts);
+                  alert("scanned");
+                }
+                if (result?.httpTargets?.length) {
+                  setHttpTargets(result);
+
+                  if (
+                    result.httpTargets.length === 1 &&
+                    result.httpTargets[0] === "skip"
+                  ) {
+                    alert("scanned");
+                    setCurrentStep(3);
+                    return;
+                  }
+
+                  setCurrentStep(2);
+                  setShowCamera(false);
+                  alert("scanned");
+                }
+              })
+              .catch(() => {
+                // noop
+              });
+          }, 1000);
+
+          run();
+
+          return () => clearInterval(id);
+        }, []);
+
+        React.useEffect(() => {
+          async function run() {
+            if (!selectedCameraId) {
+              return;
+            }
+
+            if (imageCaptureRef.current) {
+              imageCaptureRef.current.track.stop();
+            }
+
+            const mediaStream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                deviceId: { exact: selectedCameraId },
+                aspectRatio: 16 / 9,
+              },
+              audio: false,
+            });
+
+            videoRef.current.srcObject = mediaStream;
+            const tracks = mediaStream.getVideoTracks();
+            const track = tracks[0];
+
+            const temp = new ImageCapture(track);
+            imageCaptureRef.current = temp;
+          }
+
+          run();
+        }, [selectedCameraId]);
+
+        async function onRestoreClick() {
+          const response = await fetch("/api-restore", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              passphrase: password,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            alert(data?.message ?? "Something went wrong, please try again");
+            return;
+          }
+          const secret = data.message;
+          setCurrentSecret(secret);
+          setCurrentStep(5);
+        }
+
+        async function imageBitmapToBlob(imageBitmap) {
+          // Create an OffscreenCanvas
+          const offscreenCanvas = new OffscreenCanvas(
+            imageBitmap.width,
+            imageBitmap.height,
+          );
+          // Get a rendering context
+          const ctx = offscreenCanvas.getContext("2d");
+          // Draw the ImageBitmap onto the canvas
+          ctx.drawImage(imageBitmap, 0, 0);
+
+          // Convert the canvas content to a Blob (as PNG by default, or specify 'image/jpeg' and quality)
+          const blob = await offscreenCanvas.convertToBlob();
+
+          return blob;
+        }
+
+        function renderStep1() {
+          return (
+            <div>
+              <h3>Step 1</h3>
+              <p>Scan the QR code with the number 1</p>
+
+              <p>
+                Skip this step only if you understand how this system works (not
+                recommended).
+              </p>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setCurrentStep(3)}
+              >
+                Skip this step (not recommended)
+              </button>
+            </div>
+          );
+        }
+
+        function renderStep2() {
+          return (
+            <div>
+              <h3>Step 2</h3>
+              {!showCamera ? (
+                <>
+                  <p>
+                    With another device (with wifi) scan the following QR code
+                    or visit the URL below. Then press Continue.
+                  </p>
+                  <p>
+                    If you have trouble scanning it or you see an error, press
+                    Try another to get a different QR code. Then press Continue.
+                  </p>
+                  <div
+                    style={{ width: "300px", marginBottom: "10px" }}
+                    dangerouslySetInnerHTML={{
+                      __html: httpTargetQrs[currentQRindex],
+                    }}
+                  />
+                  <a href={httpTargets[currentQRindex]} target="__blank">
+                    {httpTargets[currentQRindex]}
+                  </a>
+                  <br />
+                  <button
+                    className="secondary"
+                    style={{ marginRight: "16px" }}
+                    onClick={() =>
+                      setCurrentQRindex((v) =>
+                        v + 1 >= httpTargetQrs.length ? 0 : v + 1,
+                      )
+                    }
+                  >
+                    Try another
+                  </button>
+
+                  <button
+                    style={{ marginTop: "16px" }}
+                    onClick={() => {
+                      setShowCamera((v) => !v);
+                    }}
+                  >
+                    Continue
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p>Now scan the QR code on the other device.</p>
+                  <p>You can go back to try again if you need to.</p>
+
+                  <button
+                    className="secondary"
+                    style={{ marginTop: "16px" }}
+                    onClick={() => {
+                      setShowCamera((v) => !v);
+                    }}
+                  >
+                    Back
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        }
+
+        function renderStep3() {
+          return (
+            <div>
+              <h3>Step 3</h3>
+              <p>Scan the next QR code {partsCompleted} of 4.</p>
+              <p>
+                When you finish scanning all QRs you will be taken to the next
+                step.
+              </p>
+            </div>
+          );
+        }
+
+        function renderStep4() {
+          return (
+            <div>
+              <h3>Step 4</h3>
+              <p>Enter a password to decrypt the data.</p>
+              {httpTargetSecret && (
+                <>
+                  <p>
+                    Also try the password from the initial QR code{" "}
+                    <button
+                      className="secondary small"
+                      style={{ borderRight: "20px" }}
+                      onClick={() => {
+                        navigator.clipboard.writeText(httpTargetSecret);
+                        alert("password copied to clipboard");
+                      }}
+                    >
+                      Copy to clipboard
+                    </button>
+                  </p>
+                </>
+              )}
+              <p>
+                It is possible to use more than one password such as an
+                emergency password or regular password. Try one at a time.
+              </p>
+              <input
+                type="checkbox"
+                checked={revealPassword}
+                onChange={(e) => setRevealPassword(e.target.checked)}
+              />{" "}
+              <label>Reveal password</label>
+              <input
+                style={{ marginTop: "10px" }}
+                type={revealPassword ? "text" : "password"}
+                name="passphrase"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    onRestoreClick();
+                  }
+                }}
+              />
+              <button type="button" onClick={onRestoreClick}>
+                Restore
+              </button>
+            </div>
+          );
+        }
+
+        function renderStep5() {
+          return (
+            <div>
+              <h3>Step 5</h3>
+              <p>
+                Click reveal secret to see it. You can also go back to try
+                another password.
+              </p>
+              <input
+                type="checkbox"
+                checked={revealSecret}
+                onChange={(e) => setRevealSecret(e.target.checked)}
+              />
+              <label>Reveal secret</label>
+              <textarea
+                style={{ marginTop: "16px" }}
+                onChange={() => {}}
+                value={revealSecret ? currentSecret : "*********************"}
+              />
+
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setCurrentSecret("");
+                  setRevealSecret(false);
+                  setCurrentStep(4);
+                }}
+              >
+                Back
+              </button>
+            </div>
+          );
+        }
+
+        function renderVideo() {
+          return (
+            <div
+              style={{ opacity: showCamera ? "1" : "0" }}
+              className="container"
+            >
+              <video
+                ref={videoRef}
+                autoPlay
+                style={{
+                  border: "1px solid black",
+                  margin: "20px 0px",
+                  width: "100%",
+                  maxWidth: "800px",
+                }}
+              ></video>
+              <p>Choose a camera:</p>
+              <select onChange={(e) => setSelectedCameraId(e.target.value)}>
+                {devices.map((n) => (
+                  <option key={n.deviceId} value={n.deviceId}>
+                    {n.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        }
+
+        return (
+          <div>
+            <h2>Restore Backup</h2>
+
+            {currentStep === 1 && renderStep1()}
+            {currentStep === 2 && renderStep2()}
+            {currentStep === 3 && renderStep3()}
+            {currentStep === 4 && renderStep4()}
+            {currentStep === 5 && renderStep5()}
+
+            {renderVideo()}
+          </div>
+        );
+      };
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<Page />);
+    </script>
+  </body>
+</html>

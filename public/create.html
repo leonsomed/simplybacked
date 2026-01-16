@@ -3,23 +3,143 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="/pico.min.css" />
+
+    <script
+      src="https://unpkg.com/react@18/umd/react.development.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.10.3/babel.min.js"
+      crossorigin
+    ></script>
   </head>
   <body>
-    <h1>Create Backup</h1>
+    <main class="container">
+      <nav class="container">
+        <a href="/"><h1>Simplybacked</h1></a>
+        <ul>
+          <li><a href="/create.html">Create</a></li>
+          <li><a href="/restore-with-qr.html">Restore With QR</a></li>
+        </ul>
+      </nav>
 
-    <form method="post" action="/api-create">
-      <textarea name="secret1" placeholder="Secret 1"></textarea>
-      <input name="passphrase1" type="text" placeholder="Passphrase 1" />
+      <div id="root"></div>
 
-      <textarea name="secret2" placeholder="Secret 2"></textarea>
-      <input name="passphrase2" type="text" placeholder="Passphrase 2" />
+      <script type="text/babel" data-presets="react,stage-3">
+        const Page = () => {
+          const [secret1, setSecret1] = React.useState("");
+          const [passphrase1, setPassphrase1] = React.useState("");
+          const [secret2, setSecret2] = React.useState("");
+          const [passphrase2, setPassphrase2] = React.useState("");
+          const [secret3, setSecret3] = React.useState("");
+          const [passphrase3, setPassphrase3] = React.useState("");
+          const [httpTargets, setHttpTargets] = React.useState("");
+          const [label, setLabel] = React.useState("");
 
-      <textarea name="secret3" placeholder="Secret 3"></textarea>
-      <input name="passphrase3" type="text" placeholder="Passphrase 3" />
+          async function handleCreate() {
+            const response = await fetch("/api-create", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                secret1,
+                passphrase1,
+                secret2,
+                passphrase2,
+                secret3,
+                passphrase3,
+                httpTargets,
+                label,
+              }),
+            });
 
-      <button>Submit</button>
-    </form>
+            const data = await response.json();
 
-    <script></script>
+            if (!response.ok) {
+              confirm(data?.message ?? "There was a problem, please try again");
+            } else {
+              confirm("Your backup will be downloaded shortly");
+            }
+          }
+
+          return (
+            <div>
+              <h2>Create Backup</h2>
+
+              <div>
+                <textarea
+                  name="secret1"
+                  placeholder="Secret 1"
+                  value={secret1}
+                  onChange={(e) => setSecret1(e.target.value)}
+                ></textarea>
+                <input
+                  name="passphrase1"
+                  type="text"
+                  placeholder="Passphrase 1"
+                  value={passphrase1}
+                  onChange={(e) => setPassphrase1(e.target.value)}
+                />
+                <hr />
+                <textarea
+                  name="secret2"
+                  placeholder="Secret 2"
+                  value={secret2}
+                  onChange={(e) => setSecret2(e.target.value)}
+                ></textarea>
+                <input
+                  name="passphrase2"
+                  type="text"
+                  placeholder="Passphrase 2"
+                  value={passphrase2}
+                  onChange={(e) => setPassphrase2(e.target.value)}
+                />
+                <hr />
+                <textarea
+                  name="secret3"
+                  placeholder="Secret 3"
+                  value={secret3}
+                  onChange={(e) => setSecret3(e.target.value)}
+                ></textarea>
+                <input
+                  name="passphrase3"
+                  type="text"
+                  placeholder="Passphrase 3"
+                  value={passphrase3}
+                  onChange={(e) => setPassphrase3(e.target.value)}
+                />
+
+                <p>Now extra optional settings:</p>
+
+                <textarea
+                  name="httpTargets"
+                  placeholder="HTTP Targets (comma separated)"
+                  value={httpTargets}
+                  onChange={(e) => setHttpTargets(e.target.value)}
+                ></textarea>
+
+                <textarea
+                  name="label"
+                  placeholder="Label"
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                ></textarea>
+
+                <button type="button" onClick={handleCreate}>
+                  Create
+                </button>
+              </div>
+            </div>
+          );
+        };
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(<Page />);
+      </script>
+    </main>
   </body>
 </html>
